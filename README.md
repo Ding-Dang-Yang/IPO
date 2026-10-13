@@ -7,13 +7,13 @@ The purpose of this repository is to provide a clear and reproducible implementa
 ## Repository Structure
 
 ```text
-├── test.py
+├── main.py
 └── out_core/                  # generated after running the script
     ├── all_fit_windows.csv    # generated after running the script
     └── skipped_tickers.csv    # generated only if some tickers are skipped
 ```
 
-`test.py` is the main executable script. The `out_core/` directory is the default output folder created by the script.
+`main.py` is the main executable script. The `out_core/` directory is the default output folder created by the script.
 
 ## Main Workflow
 
@@ -32,6 +32,8 @@ The script performs the following steps:
 7. Save all fitted parameters and objective values to a CSV file.
 
 By default, each block contains 60 observations and each rolling window has length 10. Therefore, each block contains 51 rolling windows, and each ticker produces 204 fitted windows.
+
+The rolling-window length is configurable, but each block contains only 60 observations. A window size greater than 60 produces no fitting windows.
 
 The normalization is performed once at the block level. Rolling windows are then extracted from the already normalized block-level cumulative return curve. The rolling windows are not normalized again.
 
@@ -59,7 +61,7 @@ Close
 Price
 ```
 
-All prices must be positive because the script computes log returns.
+All prices must be positive because the script computes log returns. Missing and non-finite price values are removed before processing. Each ticker must have at least 240 valid price observations. The script uses the original CSV row order and does not sort observations by date.
 
 ## Installation
 
@@ -93,27 +95,53 @@ To run the code on multiple tickers, include all target ticker symbols in the sa
 DEFAULT_TICKERS = ["WFF", "AAPL", "MSFT"]
 ```
 
-The script will automatically process every ticker listed in `DEFAULT_TICKERS` when running:
+The script processes the tickers listed in `DEFAULT_TICKERS` when no ticker arguments are provided.
+
+Run the script using:
 
 ```bash
-python test.py
+python "main.py"
 ```
 
-No additional ticker arguments are required if the target tickers are already specified in `DEFAULT_TICKERS`.
+Alternatively, ticker symbols can be specified directly through the command line:
+
+```bash
+python "main.py" --tickers AAPL MSFT
+```
+
+Ticker symbols can also be read from a text file:
+
+```bash
+python "main.py" --ticker-file tickers.txt
+```
+
+The ticker file can contain symbols separated by commas or newlines. All ticker symbols are converted to uppercase, and duplicates are removed.
+
+When `--ticker-file` is used without overriding `--tickers`, the tickers in `DEFAULT_TICKERS` are also included.
 
 ## Common Command-Line Arguments
 
 | Argument | Default | Description |
 |---|---:|---|
+| `--csv-dir` | `.` | Directory containing input price CSV files. |
 | `--out-dir` | `out_core` | Directory where output files are saved. |
 | `--output-name` | `all_fit_windows.csv` | Name of the main output CSV file. |
 | `--tickers` | `WFF` | Ticker symbols to process. |
+| `--ticker-file` | `None` | Optional text file containing ticker symbols. |
 | `--device` | `auto` | Computing device: `auto`, `cpu`, or `cuda`. |
 | `--dtype` | `float64` | Floating-point precision: `float32` or `float64`. |
+| `--window-size` | `10` | Number of observations in each rolling window. |
+| `--particles` | `96` | Number of particles used by PSO. |
+| `--iters` | `120` | Number of PSO iterations. |
+| `--bounds` | `1000.0` | Symmetric search bounds for each alpha parameter. |
+| `--smooth-window` | `3` | Moving-average window length, which must be a positive odd integer. |
+| `--seed` | `12345` | Base random seed for PSO initialization. |
+
+Note: Although both float32 and float64 are accepted as command-line options, the current implementation should use float64. The invalid-cost value is set to 1e300, which exceeds the representable range of float32 and causes an overflow error when constructing the cost tensor.
 
 ## Default Fitting Configuration
 
-The main fitting configuration is defined in the `FitConfig` dataclass inside `test.py`.
+The main fitting configuration is defined in the `FitConfig` dataclass inside `main.py`.
 
 | Parameter | Default | Description |
 |---|---:|---|
@@ -129,6 +157,10 @@ The main fitting configuration is defined in the `FitConfig` dataclass inside `t
 | `trend_end_weight` | `0.10` | Weight of the endpoint fitting loss. |
 | `trend_dir_weight` | `0.10` | Weight of the overall direction mismatch penalty. |
 | `base_seed` | `12345` | Base random seed used for PSO initialization. |
+| `invalid_cost` | `1e300` | Penalty assigned to invalid parameter candidates. |
+| `eps_value` | `1e-12` | Numerical tolerance used in validity checks and correlation calculations. |
+| `exp_limit` | `700.0` | Maximum allowed absolute exponential argument for valid candidates. |
+| `pso_options` | `c1=1.49, c2=1.49, w=0.72` | PSO cognitive coefficient, social coefficient, and inertia weight. |
 
 The objective-function weights sum to 1.00:
 
@@ -148,7 +180,7 @@ $$ P_1, P_2, P_3, \ldots, P_T $$
 
 The code removes missing and non-finite values and requires all remaining prices to be positive.
 
-The first 240 valid observations are then divided into four fixed 60-day blocks:
+The first 240 valid observations are then divided into four fixed 60-observation blocks:
 
 $$
 B_1 = \left(P_1, P_2, \ldots, P_{60}\right)
@@ -166,9 +198,9 @@ $$
 B_4 = \left(P_{181}, P_{182}, \ldots, P_{240}\right)
 $$
 
-Each block is normalized separately. This means that the first observation of every 60-day block is reset to 1.
+Each block is normalized separately. This means that the first observation of every 60-observation block is reset to 1.
 
-For a given 60-day block $B_b$, let the raw prices inside that block be:
+For a given 60-observation block $B_b$, let the raw prices inside that block be:
 
 $$ P_{b,1}, P_{b,2}, P_{b,3}, \ldots, P_{b,60} $$
 
@@ -188,7 +220,7 @@ Equivalently, because the cumulative sum of log returns equals the log price rat
 
 $$ C_{b,t} = \frac{P_{b,t}}{P_{b,1}}, \qquad t = 1, 2, \ldots, 60 $$
 
-Therefore, each 60-day block has its own normalized cumulative return curve:
+Therefore, each 60-observation block has its own normalized cumulative return curve:
 
 $$ C_b = \left(C_{b,1}, C_{b,2}, \ldots, C_{b,60}\right) $$
 
@@ -196,7 +228,7 @@ with:
 
 $$ C_{b,1} = 1 $$
 
-This block-level normalization is applied once per 60-day block. The rolling windows are then taken from the already normalized block-level curve. The first value of each rolling window is not separately reset to 1 unless that window starts at the first day of the block.
+This block-level normalization is applied once per 60-observation block. The rolling windows are then taken from the already normalized block-level curve. The first value of each rolling window is not separately reset to 1 unless that window starts at the first observation of the block.
 
 ### 2. Block Construction and Rolling Windows
 
@@ -240,7 +272,7 @@ $$
 t = 0, 1, 2, \ldots, W-1
 $$
 
-The first two observed values, $y_0$ and $y_1$, are used as boundary conditions for constructing the fitted curve.
+The first two observed values are used to define the initial value and an approximation of the initial slope. The initial value is set to $p_0 = y_0$, while the initial slope is approximated by the forward difference $p_1 = y_1 - y_0$.
 
 ### 4. Fitted Curve Definition
 
@@ -256,61 +288,57 @@ $$
 \theta = \left(\alpha_1, \alpha_2, \alpha_3\right)
 $$
 
-the model first computes:
+the model first computes the discriminant:
 
 $$
-\Delta = \frac{\alpha_2^2 - 4\alpha_1}{\alpha_3^2}
+D = \alpha_2^2 - 4\alpha_1\alpha_3
 $$
 
-The candidate is valid only when:
+The candidate must satisfy the following conditions:
 
 $$
-\alpha_1 \neq 0
-$$
-
-$$
-\alpha_3 \neq 0
+|\alpha_1| > \epsilon
 $$
 
 $$
-\Delta \geq 0
+|\alpha_3| > \epsilon
 $$
 
-The two characteristic terms are then computed as:
+$$
+D > 0
+$$
 
 $$
-\lambda_{+} = \frac{1}{2}
-\left(
--\frac{\alpha_2}{\alpha_3}
-+
-\sqrt{
-\frac{\alpha_2^2 - 4\alpha_1}{\alpha_3^2}
-}
-\right)
+\sqrt{D} > \epsilon
+$$
+
+where $\epsilon = 10^{-12}$. The implementation also requires finite intermediate values and exponential arguments with absolute values below 700.
+
+The two characteristic roots are then computed as:
+
+$$
+\lambda_{+} =
+\frac{-\alpha_2 + \sqrt{D}}{2\alpha_3}
 $$
 
 and
 
 $$
-\lambda_{-} = \frac{1}{2}
-\left(
--\frac{\alpha_2}{\alpha_3} - \sqrt{
-\frac{\alpha_2^2 - 4\alpha_1}{\alpha_3^2}
-}
-\right)
+\lambda_{-} =
+\frac{-\alpha_2 - \sqrt{D}}{2\alpha_3}
 $$
 
 The fitted curve has the form:
 
 $$
-\hat{y}(t) = \frac{1}{\alpha_1}
-+
-c_{+}e^{\lambda_{+}t}
+\hat{y}(t) = -\frac{1}{\alpha_1}
 +
 c_{-}e^{\lambda_{-}t}
++
+c_{+}e^{\lambda_{+}t}
 $$
 
-The constants $c_{+}$ and $c_{-}$ are determined from the first two observed values in the rolling window. Let:
+The constants $c_{+}$ and $c_{-}$ are determined from the initial value and the initial slope. The initial conditions are:
 
 $$
 p_0 = y_0
@@ -319,28 +347,50 @@ $$
 and
 
 $$
-p_1 = y_1
+p_1 = y_1 - y_0
 $$
 
-Then:
+The fitted curve is constructed to satisfy:
 
 $$
-c_{+} = \frac{\left(p_1 - \frac{1}{\alpha_1}\right)- \left(p_0 - \frac{1}{\alpha_1}\right)e^{\lambda_{-}}}{e^{\lambda_{+}} - e^{\lambda_{-}}}
+\hat{y}(0) = p_0
 $$
 
 and
 
 $$
-c_{-} = \frac{\left(p_0 - \frac{1}{\alpha_1}\right)e^{\lambda_{+}}- \left(p_1 - \frac{1}{\alpha_1}\right)}{e^{\lambda_{+}} - e^{\lambda_{-}}}
+\hat{y}'(0) = p_1
 $$
 
-The denominator must be nonzero:
+Let:
 
 $$
-e^{\lambda_{+}} - e^{\lambda_{-}} \neq 0
+A = p_0 + \frac{1}{\alpha_1}
 $$
 
-If any candidate parameter vector produces invalid, non-finite, or numerically unstable values, the script assigns it a large invalid cost and excludes it from being selected as the best solution.
+and
+
+$$
+R = \sqrt{D}
+$$
+
+The two coefficients are:
+
+$$
+c_{-} =
+-\frac{2\alpha_3 p_1 + A(\alpha_2 - R)}{2R}
+$$
+
+and
+
+$$
+c_{+} =
+\frac{2\alpha_3 p_1 + A(\alpha_2 + R)}{2R}
+$$
+
+The coefficient formulas require a nonzero value of $R$. The implementation enforces $R > \epsilon$ to avoid division by zero and numerically unstable parameter combinations.
+
+Candidates that fail the validity checks are assigned an invalid cost of $10^{300}$. The PSO algorithm minimizes the resulting objective values, but the returned best parameter vector is not independently revalidated after optimization.
 
 ### 5. Smoothing
 
@@ -638,9 +688,11 @@ Here, $w$ is the inertia weight, which controls how much of the previous velocit
 
 For each candidate parameter vector, the script generates the fitted curve:
 
-$$ \hat{y}(t) = \frac{1}{\alpha_1} + c_+e^{\lambda_+t} + c_-e^{\lambda_-t} $$
+$$
+\hat{y}(t) = -\frac{1}{\alpha_1} + c_-e^{\lambda_-t} + c_+e^{\lambda_+t}
+$$
 
-where $\lambda_+$, $\lambda_-$, $c_+$, and $c_-$ are computed from the candidate alpha parameters and the first two observed values in the rolling window.
+where $\lambda_+$, $\lambda_-$, $c_+$, and $c_-$ are computed from the candidate alpha parameters and the initial conditions $p_0 = y_0$ and $p_1 = y_1 - y_0$.
 
 The fitted curve is then evaluated using the total objective function:
 
@@ -652,7 +704,7 @@ At the end of the optimization, the best parameter vector is returned as:
 
 $$ \theta^{\star} = \left(\alpha_{1}^{\star}, \alpha_{2}^{\star}, \alpha_{3}^{\star}\right) $$
 
-The corresponding minimum objective value is:
+The corresponding best objective value found by PSO is:
 
 $$ L\left(\theta^{\star}\right) $$
 
@@ -688,18 +740,22 @@ out_core/skipped_tickers.csv
 
 This file contains the ticker symbol and the reason why it was skipped.
 
+The skipped-ticker report is written only when at least one ticker fails during the current run. The script does not automatically remove an existing skipped_tickers.csv file from previous runs.
+
 ## Reproducibility
 
 The script uses a base random seed to make the PSO fitting procedure more reproducible. The default base seed is:
 
 $$ \mathrm{base\ seed} = 12345 $$
 
-For each rolling window, the actual seed is generated by adding the zero-based window start index within the block to the base seed:
+For each rolling window, the actual seed is generated by adding the zero-based window start index within the block to the configured base seed:
 
-$$ \mathrm{seed}_{j} = 12345 + j $$
+$$
+\mathrm{seed}_{j} = \mathrm{base\_seed} + j
+$$
 
-where $j$ is the zero-based start index of the rolling window within its block. Therefore, different start positions within the same block use different random seeds. Windows with the same start index in different blocks use the same seed offset.
+where $j$ is the zero-based start index of the rolling window within its block. With the default base seed of 12345, this becomes $\mathrm{seed}_{j} = 12345 + j$. Therefore, different start positions within the same block use different random seeds. Windows with the same start index in different blocks use the same seed offset.
 
-This makes repeated runs easier to reproduce because the same ticker, block, and rolling-window start index will use the same random seed when the script is run again with the same settings.
+This makes repeated runs easier to reproduce because the same ticker, block, and rolling-window start index will use the same random seed when the script is run again with the same settings. The seed depends only on the rolling-window start index within each block, so different blocks and different tickers may use the same seed.
 
 However, exact reproducibility may still depend on the software environment, hardware, numerical precision, and computing device. In particular, CPU and GPU runs may produce small numerical differences because floating-point operations are not always executed in exactly the same order. For the most consistent results, use the same input data, package versions, device setting, dtype setting, and random seed.
