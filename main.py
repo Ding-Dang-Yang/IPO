@@ -234,39 +234,44 @@ def c_alpha123_batch(
 
     alpha1_safe = torch.where(valid, alpha1, torch.ones_like(alpha1))
     alpha2_safe = torch.where(valid, alpha2, torch.zeros_like(alpha2))
-    alpha3_safe = torch.where(valid, alpha3, torch.ones_like(alpha3))
-
+    alpha3_safe = torch.where(valid, alpha3, torch.ones_like(alpha3))    
+    
     one_over_alpha1 = 1.0 / alpha1_safe
-    radical_inside = (alpha2_safe * alpha2_safe - 4.0 * alpha1_safe) / (
-        alpha3_safe * alpha3_safe
+    discriminant = (
+        alpha2_safe * alpha2_safe
+        - 4.0 * alpha1_safe * alpha3_safe
     )
-
+    
     valid = valid & torch.isfinite(one_over_alpha1)
-    valid = valid & torch.isfinite(radical_inside) & (radical_inside >= 0.0)
-
-    radical = torch.sqrt(torch.where(valid, radical_inside, torch.zeros_like(radical_inside)))
-    minus_alpha2_over_alpha3 = -alpha2_safe / alpha3_safe
-    lambda_plus = 0.5 * (minus_alpha2_over_alpha3 + radical)
-    lambda_minus = 0.5 * (minus_alpha2_over_alpha3 - radical)
-    valid = valid & torch.isfinite(lambda_plus) & torch.isfinite(lambda_minus)
-
-    exp_plus_1 = torch.exp(
-        torch.clamp(lambda_plus, min=-config.exp_limit, max=config.exp_limit)
+    valid = valid & torch.isfinite(discriminant) & (discriminant > 0.0)
+    
+    radical = torch.sqrt(
+        torch.where(valid, discriminant, torch.ones_like(discriminant))
     )
-    exp_minus_1 = torch.exp(
-        torch.clamp(lambda_minus, min=-config.exp_limit, max=config.exp_limit)
-    )
-    denom = exp_plus_1 - exp_minus_1
-    valid = valid & torch.isfinite(denom) & (torch.abs(denom) > eps)
-
-    denom_safe = torch.where(valid, denom, torch.ones_like(denom))
-    p0_minus = p0 - one_over_alpha1
-    p1_minus = p1 - one_over_alpha1
-
-    c_plus = (p1_minus - p0_minus * exp_minus_1) / denom_safe
-    c_minus = (p0_minus * exp_plus_1 - p1_minus) / denom_safe
-    valid = valid & torch.isfinite(c_plus) & torch.isfinite(c_minus)
-
+    
+    valid = valid & torch.isfinite(radical) & (radical > eps)
+    
+    lambda_minus = (-alpha2_safe - radical) / (2.0 * alpha3_safe)
+    lambda_plus = (-alpha2_safe + radical) / (2.0 * alpha3_safe)
+    
+    valid = valid & torch.isfinite(lambda_minus) & torch.isfinite(lambda_plus)
+    
+    radical_safe = torch.where(valid, radical, torch.ones_like(radical))
+    
+    initial_offset = p0 + one_over_alpha1
+    
+    c_minus = -(
+        2.0 * alpha3_safe * p1
+        + initial_offset * (alpha2_safe - radical)
+    ) / (2.0 * radical_safe)
+    
+    c_plus = (
+        2.0 * alpha3_safe * p1
+        + initial_offset * (alpha2_safe + radical)
+    ) / (2.0 * radical_safe)
+    
+    valid = valid & torch.isfinite(c_minus) & torch.isfinite(c_plus)
+    
     expo_plus_t = lambda_plus[:, None] * t[None, :]
     expo_minus_t = lambda_minus[:, None] * t[None, :]
     valid = valid & (torch.abs(expo_plus_t).amax(dim=1) < config.exp_limit)
@@ -279,8 +284,13 @@ def c_alpha123_batch(
         torch.clamp(expo_minus_t, min=-config.exp_limit, max=config.exp_limit)
     )
 
-    c_values = one_over_alpha1[:, None] + c_plus[:, None] * exp_plus_t + c_minus[:, None] * exp_minus_t
+    c_values = (
+        -one_over_alpha1[:, None]
+        + c_minus[:, None] * exp_minus_t
+        + c_plus[:, None] * exp_plus_t
+    )
     valid = valid & torch.isfinite(c_values).all(dim=1)
+    
     return c_values, valid
 
 
@@ -403,7 +413,11 @@ def prepare_window(
     values = block_values[start_idx : start_idx + config.window_size]
     c_target = torch.tensor(values, device=device, dtype=config.dtype)
     t = torch.arange(config.window_size, device=device, dtype=config.dtype)
-    return c_target, t, c_target[0], c_target[1]
+
+    p0 = c_target[0]
+    p1 = c_target[1] - c_target[0]
+
+    return c_target, t, p0, p1
 
 
 def fit_ticker(ticker: str, device: torch.device, config: FitConfig) -> List[Dict[str, object]]:
