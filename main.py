@@ -36,8 +36,8 @@ class FitConfig:
         default_factory=lambda: {"c1": 1.49, "c2": 1.49, "w": 0.72}
     )
     alpha_bounds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]] = (
-        (-1000.0, 1000.0),
-        (-1000.0, 1000.0),
+        (0.0, 1000.0),
+        (0.0, 1000.0),
         (-1000.0, 1000.0),
     )
     smooth_window: int = 3
