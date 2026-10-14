@@ -482,8 +482,8 @@ def build_config(args: argparse.Namespace) -> FitConfig:
     tickers = parse_tickers(args.tickers, args.ticker_file)
     dtype = dtype_from_name(args.dtype)
     bounds = (
-        (-args.bounds, args.bounds),
-        (-args.bounds, args.bounds),
+        (0.0, args.bounds),
+        (0.0, args.bounds),
         (-args.bounds, args.bounds),
     )
 
