@@ -148,7 +148,7 @@ The main fitting configuration is defined in the `FitConfig` dataclass inside `m
 | `window_size` | `10` | Number of observations in each rolling window. |
 | `n_particles` | `96` | Number of particles used by PSO. |
 | `n_iters` | `120` | Number of PSO iterations. |
-| `alpha_bounds` | `[-1000, 1000]` | Search range for each alpha parameter. |
+| `alpha_bounds` | `alpha1, alpha2: [0, 1000]; alpha3: [-1000, 1000]` | Search range for each alpha parameter.|
 | `smooth_window` | `3` | Moving-average window used to smooth fitted and observed curves in the objective function. |
 | `trend_scale_floor` | `5e-3` | Minimum scale used to avoid unstable loss values when the target curve has very small variation. |
 | `raw_weight` | `0.45` | Weight of the raw pointwise fitting error. |
